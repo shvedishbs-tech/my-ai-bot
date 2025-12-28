@@ -16,9 +16,11 @@ def run_server():
     server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), HealthCheckHandler)
     server.serve_forever()
 
-# Настройки
+# Настройка с явным указанием версии
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Пробуем более стабильное имя модели
+model = genai.GenerativeModel(model_name='models/gemini-1.5-flash')
 bot = Bot(token=os.getenv("TG_TOKEN"))
 dp = Dispatcher()
 
