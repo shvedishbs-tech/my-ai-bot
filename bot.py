@@ -2,72 +2,54 @@ import asyncio
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-
 from aiogram import Bot, Dispatcher, types
 import google.generativeai as genai
 
-# --- СЕКЦИЯ ДЛЯ RENDER (ЧТОБЫ НЕ ВЫКЛЮЧАЛСЯ) ---
+# --- 1. Мини-сервер для Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running")
+        self.wfile.write(b"Bot is alive")
 
 def run_health_check():
-    # Render передает порт в переменную окружения PORT
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+    httpd = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    httpd.serve_forever()
 
-# Запуск мини-сервера в фоновом потоке
-threading.Thread(target=run_health_check, daemon=True).start()
-
-# --- НАСТРОЙКИ ИИ И ТЕЛЕГРАМ ---
+# --- 2. Настройки ---
 TG_TOKEN = os.getenv("TG_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# Настраиваем Google Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
-# Используем самую стабильную версию модели
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 
+# --- 3. Логика ответов ---
 @dp.message()
-async def handle_messages(message: types.Message):
-    # Проверяем: личка или упоминание в группе
-    is_private = message.chat.type == 'private'
-    
+async def talk_to_ai(message: types.Message):
+    # Если личка или упоминание
     bot_info = await bot.get_me()
-    is_mention = message.text and f"@{bot_info.username}" in message.text
-
-    if is_private or is_mention:
+    if message.chat.type == 'private' or (message.text and f"@{bot_info.username}" in message.text):
         try:
-            # Очищаем текст от упоминания бота
-            clean_text = message.text.replace(f"@{bot_info.username}", "").strip()
-            if not clean_text:
-                clean_text = "Привет!"
-
-            # Запрос к нейросети
-            response = model.generate_content(clean_text)
-            
-            # Ответ пользователю
-            if response.text:
-                await message.reply(response.text)
-            else:
-                await message.reply("ИИ прислал пустой ответ, попробуйте еще раз.")
-                
+            print(f"Запрос от {message.from_user.first_name}: {message.text}")
+            user_text = message.text.replace(f"@{bot_info.username}", "").strip()
+            response = model.generate_content(user_text if user_text else "Привет")
+            await message.reply(response.text)
         except Exception as e:
-            # Если ошибка — бот напишет её в чат (удобно для отладки)
-            error_message = str(e)
-            if "location is not supported" in error_message.lower():
-                await message.reply("Ошибка: Google блокирует запросы из этого региона. Измените регион в Render на USA.")
-            else:
-                await message.reply(f"Произошла ошибка: {error_message}")
+            print(f"Ошибка ИИ: {e}")
+            await message.reply(f"Произошла ошибка: {e}")
 
+# --- 4. Главная функция запуска ---
 async def main():
-    print("Бот запускается...")
+    # Сначала запускаем веб-сервер в отдельном потоке
+    server_thread = threading.Thread(target=run_health_check, daemon=True)
+    server_thread.start()
+    
+    print("Бот запускается и начинает слушать Telegram...")
+    # Затем запускаем опрос Телеграма
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
